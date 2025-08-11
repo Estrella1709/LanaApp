@@ -1,111 +1,144 @@
-/**
- * RegisterScreen
- * --------------
- * Pantalla de registro de usuario.
- *
- * Flujo:
- *  - Renderiza un formulario con: nombre, email, password y confirmación.
- *  - Usa KeyboardAvoidingView + ScrollView para evitar que el teclado tape los campos y permitir scroll.
- *  - Botón "Registrar": actualmente navega directo a 'Transactions' (placeholder).
- *
- * Integración con API (marcado abajo):
- *  - En el onPress del botón "Registrar", reemplaza la navegación directa por un handler que:
- *      1) Valide inputs (campos vacíos y password === confirmPassword).
- *      2) Haga POST al endpoint (p. ej. POST /auth/register).
- *      3) Maneje loading/errores.
- *      4) (Opcional) Guarde token/usuario (SecureStore/AsyncStorage) si la API lo retorna.
- *      5) Navegue a 'Login' o 'Transactions' según tu flujo (común: ir a Login).
- *
- * Sugerencias de implementación (cuando conectes backend):
- *  - Añade estados: name/email/password/confirmPassword + loading + error.
- *  - Crea un handleRegister async con try/catch (fetch/axios).
- *  - Deshabilita el botón mientras loading.
- *  - Muestra mensajes de error debajo del botón si algo falla.
- */
-
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, KeyboardAvoidingView, ScrollView, Platform } from 'react-native';
+import { useState } from 'react';
+import {
+  View, Text, TextInput, TouchableOpacity, StyleSheet,
+  KeyboardAvoidingView, ScrollView, Platform, Alert, ActivityIndicator
+} from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
+import { apiFetch, setToken } from '../services/api';
 
 export default function RegisterScreen({ navigation }) {
+  const [name, setName] = useState('');
+  const [lastname, setLastname] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState(''); // 10 dígitos
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+
+  const [loading, setLoading] = useState(false);
+
+  const handleRegister = async () => {
+    // Validaciones rápidas acordes a tu Pydantic
+    const phoneClean = phone.replace(/\D/g, '');
+    if (name.trim().length < 3) return Alert.alert('Registro', 'Nombre mínimo 3 caracteres.');
+    if (lastname.trim().length < 3) return Alert.alert('Registro', 'Apellido mínimo 3 caracteres.');
+    if (!email.includes('@')) return Alert.alert('Registro', 'Correo no válido.');
+    if (phoneClean.length !== 10) return Alert.alert('Registro', 'Teléfono debe tener 10 dígitos.');
+    if (!password) return Alert.alert('Registro', 'La contraseña es obligatoria.');
+    if (password !== confirm) return Alert.alert('Registro', 'Las contraseñas no coinciden.');
+
+    try {
+      setLoading(true);
+
+      // 1) Registrar
+      await apiFetch('/registerUser', {
+        method: 'POST',
+        body: {
+          name: name.trim(),
+          lastname: lastname.trim(),
+          email: email.trim(),
+          phone: phoneClean,
+          password,
+        },
+      });
+
+      // 2) Auto-login (intenta con email+password)
+      try {
+        const loginRes = await apiFetch('/validateUser', {
+          method: 'POST',
+          body: {
+            email: email.trim(),
+            password,
+          },
+        });
+        // La API devuelve un token plano o { token: '...' }
+        const token = typeof loginRes === 'string'
+          ? loginRes
+          : loginRes?.token || loginRes?.access_token;
+
+        if (token) {
+          await setToken(token);
+          navigation.replace('Transactions');
+          return;
+        }
+        // Si no viene token, cae al catch
+        throw new Error('No se recibió token');
+      } catch (e) {
+        // Si el esquema del login exige más campos, te mando a Login
+        Alert.alert('Registro completado', 'Ahora inicia sesión con tus credenciales.');
+        navigation.replace('Login');
+      }
+    } catch (e) {
+      Alert.alert('No se pudo registrar', e.message || 'Error de red');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    // Fondo con degradado acorde al diseño general
     <LinearGradient colors={['#f9e26a', '#e99ebe']} style={{ flex:1 }}>
-      {/* Evita solape con teclado en iOS */}
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex:1 }}>
-        {/* Permite scrollear si el contenido crece (pantallas pequeñas/teclado abierto) */}
         <ScrollView contentContainerStyle={{ flexGrow:1, justifyContent:'center', padding:16 }}>
-          {/* Tarjeta del formulario */}
           <View style={s.card}>
             <Text style={s.title}>Registro</Text>
 
-            {/* NOMBRE
-               API: al integrar, usa estado local (value/onChangeText) -> name/setName
-            */}
-            <Text style={s.label}>Nombre completo</Text>
-            <TextInput style={s.input} />
+            <Text style={s.label}>Nombre</Text>
+            <TextInput
+              style={s.input}
+              value={name}
+              onChangeText={setName}
+              placeholder="Juan"
+            />
 
-            {/* EMAIL
-               API: bindea a email/setEmail
-               Recomendado: autoCapitalize="none", keyboardType="email-address"
-            */}
+            <Text style={s.label}>Apellido</Text>
+            <TextInput
+              style={s.input}
+              value={lastname}
+              onChangeText={setLastname}
+              placeholder="Pérez"
+            />
+
             <Text style={s.label}>Correo electrónico</Text>
-            <TextInput style={s.input} />
+            <TextInput
+              style={s.input}
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              keyboardType="email-address"
+              placeholder="correo@example.com"
+            />
 
-            {/* PASSWORD
-               API: bindea a password/setPassword
-            */}
+            <Text style={s.label}>Teléfono (10 dígitos)</Text>
+            <TextInput
+              style={s.input}
+              value={phone}
+              onChangeText={(t) => setPhone(t.replace(/\D/g, ''))}
+              keyboardType="number-pad"
+              maxLength={10}
+              placeholder="4421234567"
+            />
+
             <Text style={s.label}>Contraseña</Text>
-            <TextInput style={s.input} secureTextEntry />
+            <TextInput
+              style={s.input}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+              placeholder="••••••••"
+            />
 
-            {/* CONFIRM PASSWORD
-               API: bindea a confirmPassword/setConfirmPassword
-               Valida que coincida con password antes de llamar la API.
-            */}
             <Text style={s.label}>Confirmar contraseña</Text>
-            <TextInput style={s.input} secureTextEntry />
+            <TextInput
+              style={s.input}
+              value={confirm}
+              onChangeText={setConfirm}
+              secureTextEntry
+              placeholder="••••••••"
+            />
 
-            {/* BOTÓN REGISTRAR
-               API: reemplazar navigation.replace(...) por un handler handleRegister():
-               -----------------------------------------------------------
-               onPress={async () => {
-                 // 1) Validación
-                 // if (!name || !email || !password || !confirmPassword) { setError('Completa todos los campos'); return; }
-                 // if (password !== confirmPassword) { setError('Las contraseñas no coinciden'); return; }
-
-                 // 2) Llamada a API (ajusta URL y payload)
-                 // try {
-                 //   setLoading(true);
-                 //   const res = await fetch(`${API_URL}/auth/register`, {
-                 //     method: 'POST',
-                 //     headers: { 'Content-Type': 'application/json' },
-                 //     body: JSON.stringify({ name, email, password })
-                 //   });
-                 //   if (!res.ok) {
-                 //     const err = await res.json().catch(()=>null);
-                 //     throw new Error(err?.message || 'No se pudo registrar');
-                 //   }
-                 //   const data = await res.json(); // { token?, user? }
-                 //
-                 //   // 3) (Opcional) guardar token si tu API lo manda tras registro
-                 //   // await SecureStore.setItemAsync('auth_token', data.token);
-                 //
-                 //   // 4) Navegación post-registro:
-                 //   // Común: ir a Login para que el usuario inicie sesión:
-                 //   navigation.replace('Login');
-                 //   // O si tu API ya inicia sesión: navigation.replace('Transactions');
-                 // } catch (e) {
-                 //   setError(e.message || 'Error de red');
-                 // } finally {
-                 //   setLoading(false);
-                 // }
-               }}
-               -----------------------------------------------------------
-            */}
-            <TouchableOpacity style={s.btn} onPress={() => navigation.replace('Transactions') /* <-- Placeholder temporal */}>
-              <Text style={s.btnText}>Registrar</Text>
+            <TouchableOpacity style={s.btn} onPress={handleRegister} disabled={loading}>
+              {loading ? <ActivityIndicator color="#fff" /> : <Text style={s.btnText}>Registrar</Text>}
             </TouchableOpacity>
 
-            {/* Link para volver a Login */}
             <TouchableOpacity onPress={() => navigation.goBack()}>
               <Text style={s.link}>¿Ya tienes una cuenta?</Text>
             </TouchableOpacity>

@@ -7,6 +7,7 @@ import RegisterScreen from '../screens/RegisterScreen';
 import TransactionsScreen from '../screens/TransactionsScreen';
 import AddEditTransactionScreen from '../screens/AddEditTransactionScreen';
 import DeleteTransactionScreen from '../screens/DeleteTransactionScreen';
+import AddEditBudgetScreen from '../screens/AddEditBudgetScreen';
 
 import CategoriesScreen from '../screens/placeholders/CategoriesScreen';
 import FixedPaymentsScreen from '../screens/placeholders/FixedPaymentsScreen';
@@ -14,6 +15,7 @@ import AddEditFixedPaymentScreen from '../screens/AddEditFixedPaymentScreen';
 
 import ChartsScreen from '../screens/placeholders/ChartsScreen';
 import SetBudgetScreen from '../screens/placeholders/SetBudgetScreen';
+
 
 const Stack = createNativeStackNavigator();
 
@@ -34,6 +36,7 @@ export default function RootStack() {
 
       <Stack.Screen name="Charts" component={ChartsScreen} />
       <Stack.Screen name="SetBudget" component={SetBudgetScreen} />
+      <Stack.Screen name="AddEditBudget" component={AddEditBudgetScreen} />
     </Stack.Navigator>
   );
 }

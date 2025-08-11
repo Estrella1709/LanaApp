@@ -1,125 +1,115 @@
 /**
- * CategoriesScreen
- * ----------------
- * Pantalla para listar y gestionar categorías (agregar, editar, eliminar).
- *
- * Flujo actual (demo con estado local):
- *  - Muestra una lista (FlatList) de categorías mock en estado local.
- *  - FAB (+) abre modal para AGREGAR.
- *  - Botón "edit" abre modal para EDITAR (pre-carga el nombre en el input).
- *  - Botón "delete" abre modal para ELIMINAR (confirmación simple).
- *
- * 🔌 Integración con API (marcado con // API: ...):
- *  1) Cargar categorías al entrar:
- *     - useEffect(() => { GET /categories; setCategories(res); }, []);
- *     - Opcional: paginación / búsqueda por nombre.
- *
- *  2) Agregar categoría:
- *     - POST /categories  { name }
- *     - Al éxito: actualizar lista (push a estado o re-fetch).
- *
- *  3) Editar categoría:
- *     - PUT/PATCH /categories/:id  { name }
- *     - Al éxito: actualizar lista (map) o re-fetch.
- *
- *  4) Eliminar categoría:
- *     - DELETE /categories/:id
- *     - Al éxito: actualizar lista (filter) o re-fetch.
- *
- * UX:
- *  - Los tres modales comparten el mismo input (solo se usa en add/edit).
- *  - contentContainerStyle deja espacio para que el FAB no tape el último ítem.
+ * CategoriesScreen (conectada a FastAPI)
+ * - Carga categorías al entrar (GET /categories/)
+ * - Agrega (POST /categories/)
+ * - Edita  (PUT   /categories/{id})
+ * - Borra  (DELETE /categories/{id})
  */
 
-import { useState /*, useEffect */ } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, FlatList } from 'react-native';
+import { useEffect, useState } from 'react';
+import {
+  View, Text, StyleSheet, TouchableOpacity, Modal,
+  TextInput, FlatList, Alert, ActivityIndicator
+} from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import * as api from '../../services/api';   // 👈 importa TODO como api
 
 export default function CategoriesScreen() {
-  /** Estado local con datos mock
-   *  // API: reemplazar por GET /categories al montar
-   *  useEffect(() => {
-   *    (async () => {
-   *      const res = await fetch(`${API_URL}/categories`);
-   *      const data = await res.json();
-   *      setCategories(data); // [{id, name}]
-   *    })();
-   *  }, []);
-   */
-  const [categories, setCategories] = useState([
-    { id: 'c1', name: 'Salario' },
-    { id: 'c2', name: 'Renta' },
-    { id: 'c3', name: 'Inversiones' },
-    { id: 'c4', name: 'Comida' },
-    { id: 'c5', name: 'Entretenimiento' },
-  ]);
+  const [categories, setCategories] = useState([]);
+  const [loading, setLoading] = useState(false);
 
-  // Control de modales y formulario
-  const [modalType, setModalType] = useState(null); // 'add' | 'edit' | 'delete'
-  const [target, setTarget] = useState(null);       // categoría seleccionada para edit/delete
-  const [input, setInput] = useState('');           // nombre de categoría en add/edit
+  const [modalType, setModalType] = useState(null);
+  const [target, setTarget] = useState(null);
+  const [input, setInput] = useState('');
 
-  /** Abrir modal de AGREGAR */
-  const openAdd = () => { setModalType('add'); setTarget(null); setInput(''); };
+  useEffect(() => { load(); }, []);
+  const load = async () => {
+    try {
+      setLoading(true);
+      const res = await api.getCategoriesApi();  // 👈
+      const norm = Array.isArray(res)
+        ? res.map(c => ({
+            id: c.id ?? c.ID ?? c.Id ?? c.id_category ?? c.idCategory,
+            name: c.name ?? c.Nombre ?? c.nombre ?? 'Sin nombre',
+            description: c.description ?? '',
+            schedulable: !!c.schedulable,
+          })).filter(c => c.id != null)
+        : [];
+      setCategories(norm);
+    } catch (e) {
+      Alert.alert('Error', e.message || 'No se pudieron cargar las categorías');
+    } finally {
+      setLoading(false);
+    }
+  };
 
-  /** Abrir modal de EDITAR (pre-carga nombre) */
-  const openEdit = (cat) => { setModalType('edit'); setTarget(cat); setInput(cat.name); };
-
-  /** Abrir modal de ELIMINAR (solo confirma) */
+  const openAdd    = () => { setModalType('add'); setTarget(null); setInput(''); };
+  const openEdit   = (cat) => { setModalType('edit'); setTarget(cat); setInput(cat.name); };
   const openDelete = (cat) => { setModalType('delete'); setTarget(cat); };
-
-  /** Cerrar cualquier modal y limpiar estados */
   const closeModal = () => { setModalType(null); setTarget(null); setInput(''); };
 
-  /** AGREGAR categoría (demo: actualiza estado local)
-   *  // API:
-   *  const onAdd = async () => {
-   *    const name = input.trim(); if (!name) return;
-   *    const res = await fetch(`${API_URL}/categories`, {
-   *      method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name })
-   *    });
-   *    const created = await res.json(); // {id, name}
-   *    setCategories(prev => [...prev, created]); closeModal();
-   *  };
-   */
-  const onAdd = () => {
+  const onAdd = async () => {
     const name = input.trim(); if (!name) return;
-    setCategories((p) => [...p, { id: `c${Date.now()}`, name }]);
-    closeModal();
+    try {
+      setLoading(true);
+      const created = await api.createCategoryApi({ name, description: '', schedulable: false }); // 👈
+      const cat = created?.id ? created
+                : created?.categoria?.id ? created.categoria
+                : { id: Date.now(), name, description: '', schedulable: false };
+      setCategories(prev => [...prev, {
+        id: cat.id, name: cat.name ?? name,
+        description: cat.description ?? '',
+        schedulable: !!cat.schedulable
+      }]);
+      closeModal();
+    } catch (e) {
+      Alert.alert('Error', e.message || 'No se pudo crear la categoría');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  /** EDITAR categoría (demo: actualiza estado local)
-   *  // API:
-   *  const onEdit = async () => {
-   *    const name = input.trim(); if (!name || !target) return;
-   *    const res = await fetch(`${API_URL}/categories/${target.id}`, {
-   *      method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ name })
-   *    });
-   *    const updated = await res.json(); // {id, name}
-   *    setCategories(prev => prev.map(c => c.id === updated.id ? updated : c));
-   *    closeModal();
-   *  };
-   */
-  const onEdit = () => {
+  const onEdit = async () => {
     const name = input.trim(); if (!name || !target) return;
-    setCategories((p) => p.map((c) => c.id === target.id ? { ...c, name } : c));
-    closeModal();
+    try {
+      setLoading(true);
+      const payload = {
+        name,
+        description: target.description ?? '',
+        schedulable: !!target.schedulable,
+      };
+      const updated = await api.updateCategoryApi(target.id, payload); // 👈
+      const updatedCat = updated?.id ? updated : { ...target, ...payload };
+      setCategories(prev => prev.map(c =>
+        c.id === target.id
+          ? { ...c,
+              name: updatedCat.name ?? name,
+              description: updatedCat.description ?? '',
+              schedulable: !!updatedCat.schedulable
+            }
+          : c
+      ));
+      closeModal();
+    } catch (e) {
+      Alert.alert('Error', e.message || 'No se pudo editar la categoría');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  /** ELIMINAR categoría (demo: actualiza estado local)
-   *  // API:
-   *  const onDelete = async () => {
-   *    if (!target) return;
-   *    await fetch(`${API_URL}/categories/${target.id}`, { method:'DELETE' });
-   *    setCategories(prev => prev.filter(c => c.id !== target.id));
-   *    closeModal();
-   *  };
-   */
-  const onDelete = () => {
+  const onDelete = async () => {
     if (!target) return;
-    setCategories((p) => p.filter((c) => c.id !== target.id));
-    closeModal();
+    try {
+      setLoading(true);
+      await api.deleteCategoryApi(target.id); // 👈
+      setCategories(prev => prev.filter(c => c.id !== target.id));
+      closeModal();
+    } catch (e) {
+      Alert.alert('Error', e.message || 'No se pudo eliminar');
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -130,47 +120,51 @@ export default function CategoriesScreen() {
         <Ionicons name="settings-sharp" size={20} color="#cfe" />
       </View>
 
-      {/* Lista de categorías */}
+      {/* Lista */}
       <View style={s.card}>
-        <FlatList
-          data={categories}
-          keyExtractor={(it) => it.id}
-          renderItem={({ item }) => (
-            <View style={{ paddingVertical: 10 }}>
-              <View style={s.row}>
-                <Text style={s.catName}>{item.name}</Text>
-                <View style={s.actions}>
-                  {/* Editar */}
-                  <TouchableOpacity style={[s.iconBtn, { backgroundColor: '#F5A524' }]} onPress={() => openEdit(item)}>
-                    <MaterialIcons name="edit" size={16} color="#fff" />
-                  </TouchableOpacity>
-                  {/* Eliminar */}
-                  <TouchableOpacity style={[s.iconBtn, { backgroundColor: '#F08AB2' }]} onPress={() => openDelete(item)}>
-                    <MaterialIcons name="delete" size={16} color="#fff" />
-                  </TouchableOpacity>
+        {loading && categories.length === 0 ? (
+          <View style={{ paddingVertical: 30, alignItems:'center' }}>
+            <ActivityIndicator />
+            <Text style={{ color:'#ccc', marginTop:8 }}>Cargando…</Text>
+          </View>
+        ) : (
+          <FlatList
+            data={categories}
+            keyExtractor={(it) => String(it.id)}
+            renderItem={({ item }) => (
+              <View style={{ paddingVertical: 10 }}>
+                <View style={s.row}>
+                  <Text style={s.catName}>{item.name}</Text>
+                  <View style={s.actions}>
+                    <TouchableOpacity style={[s.iconBtn, { backgroundColor: '#F5A524' }]} onPress={() => openEdit(item)}>
+                      <MaterialIcons name="edit" size={16} color="#fff" />
+                    </TouchableOpacity>
+                    <TouchableOpacity style={[s.iconBtn, { backgroundColor: '#F08AB2' }]} onPress={() => openDelete(item)}>
+                      <MaterialIcons name="delete" size={16} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </View>
-            </View>
-          )}
-          ItemSeparatorComponent={() => <View style={s.divider} />}
-          contentContainerStyle={{ paddingVertical: 10, paddingHorizontal: 4, paddingBottom: 100 }}
-          showsVerticalScrollIndicator={false}
-        />
+            )}
+            ItemSeparatorComponent={() => <View style={s.divider} />}
+            contentContainerStyle={{ paddingVertical: 10, paddingHorizontal: 4, paddingBottom: 100 }}
+            showsVerticalScrollIndicator={false}
+          />
+        )}
       </View>
 
-      {/* FAB (+) para agregar */}
+      {/* FAB */}
       <View style={s.fabContainer}>
         <TouchableOpacity style={s.fab} onPress={openAdd} activeOpacity={0.9}>
           <Ionicons name="add" size={26} color="#fff" />
         </TouchableOpacity>
       </View>
 
-      {/* MODAL: Agregar */}
+      {/* MODALES */}
       <Modal visible={modalType === 'add'} transparent animationType="fade" onRequestClose={closeModal}>
         <View style={s.backdrop}>
           <View style={s.modalBox}>
             <Text style={s.modalTitle}>Nombre de categoría:</Text>
-            {/* Input de nombre (estado 'input') */}
             <TextInput
               value={input}
               onChangeText={setInput}
@@ -179,23 +173,17 @@ export default function CategoriesScreen() {
               style={s.input}
             />
             <View style={s.modalActions}>
-              <TouchableOpacity style={[s.modalBtn, s.btnCancel]} onPress={closeModal}>
-                <Text style={s.btnCancelText}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.modalBtn, s.btnAdd]} onPress={onAdd /* API: usar versión async de arriba */}>
-                <Text style={s.btnAddText}>Agregar</Text>
-              </TouchableOpacity>
+              <TouchableOpacity style={[s.modalBtn, s.btnCancel]} onPress={closeModal}><Text style={s.btnCancelText}>Cancelar</Text></TouchableOpacity>
+              <TouchableOpacity style={[s.modalBtn, s.btnAdd]} onPress={onAdd}><Text style={s.btnAddText}>Agregar</Text></TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* MODAL: Editar */}
       <Modal visible={modalType === 'edit'} transparent animationType="fade" onRequestClose={closeModal}>
         <View style={s.backdrop}>
           <View style={s.modalBox}>
-            <Text style={s.modalTitle}>¿Seguro que quieres editar esta categoría?</Text>
-            {/* Input con el nombre actual (estado 'input') */}
+            <Text style={s.modalTitle}>Editar categoría</Text>
             <TextInput
               value={input}
               onChangeText={setInput}
@@ -204,29 +192,20 @@ export default function CategoriesScreen() {
               style={s.input}
             />
             <View style={s.modalActions}>
-              <TouchableOpacity style={[s.modalBtn, s.btnCancel]} onPress={closeModal}>
-                <Text style={s.btnCancelText}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.modalBtn, s.btnEdit]} onPress={onEdit /* API: usar versión async */}>
-                <Text style={s.btnEditText}>Editar</Text>
-              </TouchableOpacity>
+              <TouchableOpacity style={[s.modalBtn, s.btnCancel]} onPress={closeModal}><Text style={s.btnCancelText}>Cancelar</Text></TouchableOpacity>
+              <TouchableOpacity style={[s.modalBtn, s.btnEdit]} onPress={onEdit}><Text style={s.btnEditText}>Editar</Text></TouchableOpacity>
             </View>
           </View>
         </View>
       </Modal>
 
-      {/* MODAL: Eliminar */}
       <Modal visible={modalType === 'delete'} transparent animationType="fade" onRequestClose={closeModal}>
         <View style={s.backdrop}>
           <View style={s.modalBox}>
             <Text style={s.modalTitle}>¿Seguro que quieres eliminar esta categoría?</Text>
             <View style={s.modalActions}>
-              <TouchableOpacity style={[s.modalBtn, s.btnCancel]} onPress={closeModal}>
-                <Text style={s.btnCancelText}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.modalBtn, s.btnDelete]} onPress={onDelete /* API: usar versión async */}>
-                <Text style={s.btnDeleteText}>Eliminar</Text>
-              </TouchableOpacity>
+              <TouchableOpacity style={[s.modalBtn, s.btnCancel]} onPress={closeModal}><Text style={s.btnCancelText}>Cancelar</Text></TouchableOpacity>
+              <TouchableOpacity style={[s.modalBtn, s.btnDelete]} onPress={onDelete}><Text style={s.btnDeleteText}>Eliminar</Text></TouchableOpacity>
             </View>
           </View>
         </View>

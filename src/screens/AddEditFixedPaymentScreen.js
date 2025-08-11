@@ -1,136 +1,132 @@
-/**
- * AddEditFixedPaymentScreen
- * -------------------------
- * Pantalla para AGREGAR o EDITAR un "pago fijo".
- *
- * Flujo (demo con estado local):
- *  - Si viene route.params.mode === 'edit' y route.params.payment, precarga los campos.
- *  - Si viene 'add', parte con valores vacíos/por defecto.
- *  - El botón principal llama `save()`:
- *      • DEMO: ejecuta onSave (callback recibido por params) y hace goBack().
- *      • API: reemplazar por POST/PUT al backend (ver marcadores // API: ...).
- *
- * UI:
- *  - Selector de categoría (CategoryPickerModal).
- *  - Input de monto.
- *  - Selector de fecha (DateTimePicker nativo).
- *  - Scroll + KeyboardAvoidingView para un buen comportamiento con teclado.
- *
- * 🔌 Integración con API (marcado con // API: ...):
- *  1) Cargar categorías reales:
- *     - Reemplazar `demoCategories` por datos de backend:
- *       GET /categories?scope=fixedPayments (o el que definas)
- *       Guardarlas en estado y pasarlas al modal.
- *
- *  2) Modo 'edit' (precarga real):
- *     - Si solo viene `payment.id`, hacer GET /fixed-payments/:id para traer datos
- *       más frescos y setear estado (category, amount, date).
- *
- *  3) Guardar:
- *     - ADD:  POST /fixed-payments { category, amount, date }
- *     - EDIT: PUT  /fixed-payments/:id { category, amount, date }
- *     - Al éxito: navigation.goBack() y refrescar la lista en FixedPaymentsScreen
- *       (useFocusEffect con re-fetch, o pasando callback/flag por params).
- *
- *  4) Validación:
- *     - Verificar que category exista, amount > 0 y date válido antes de llamar API.
- */
-
-import { useState /*, useEffect */ } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, TextInput, Platform,
-  KeyboardAvoidingView, ScrollView
+  KeyboardAvoidingView, ScrollView, Alert
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import CategoryPickerModal from '../components/CategoryPickerModal';
 
-/** DEMO: categorías mock
- *  // API: reemplazar por categorías reales.
- *  // Sugerencia:
- *  //   useEffect(() => {
- *  //     (async () => {
- *  //       const res = await fetch(`${API_URL}/categories?scope=fixedPayments`);
- *  //       const data = await res.json(); // ['Renta','Internet',...]
- *  //       setCategories(data);
- *  //     })();
- *  //   }, []);
- */
-const demoCategories = ['Renta','Internet','Despensa','Servicios','Transporte','Comida'];
+import {
+  apiFetch,               // para /categories/
+  createFixedPayment,
+  updateFixedPayment,
+} from '../services/api';
+
+const FALLBACK_CATS = [
+  { id: 1, name: 'Renta' },
+  { id: 2, name: 'Internet' },
+  { id: 3, name: 'Despensa' },
+  { id: 4, name: 'Servicios' },
+  { id: 5, name: 'Transporte' },
+];
 
 export default function AddEditFixedPaymentScreen({ route, navigation }) {
-  const { mode = 'add', payment, onSave } = route.params || {};
+  const { mode = 'add', payment } = route.params || {};
   const isEdit = mode === 'edit';
+  const [pickCat, setPickCat] = useState(false);
 
-  /** Estado del formulario
-   *  // API (edit con id): opcionalmente revalidar datos con GET /fixed-payments/:id aquí.
-   */
-  const [category, setCategory] = useState(payment?.category || 'Renta');
-  const [amount, setAmount]     = useState(payment?.amount?.toString() ?? '');
-  const [date, setDate]         = useState(payment?.date ? new Date(payment.date) : new Date());
+  // categorías reales
+  const [categories, setCategories] = useState(FALLBACK_CATS);
+  useEffect(() => {
+    (async () => {
+      try {
+        const cats = await apiFetch('/categories/');
+        if (Array.isArray(cats) && cats.length) {
+          const norm = cats.map(x => ({
+            id: x.id ?? x.ID ?? x.Id ?? x.id_category ?? x.idCategory ?? x.id,
+            name: x.name ?? x.Nombre ?? x.nombre ?? `${x.id}`,
+          }));
+          setCategories(norm);
+        }
+      } catch { /* fallback */ }
+    })();
+  }, []);
 
-  // Control de modales
-  const [showPicker, setShowPicker] = useState(false);
-  const [showDate, setShowDate]     = useState(false);
+  const names = useMemo(() => categories.map(c => c.name), [categories]);
+  const nameToId = useMemo(() => {
+    const m = new Map(); categories.forEach(c => m.set(c.name, c.id)); return m;
+  }, [categories]);
+  const idToName = useMemo(() => {
+    const m = new Map(); categories.forEach(c => m.set(c.id, c.name)); return m;
+  }, [categories]);
 
-  /** Guardar (demo local con callback onSave)
-   *  // API: reemplazar por POST/PUT reales:
-   *  //   try {
-   *  //     const payload = { category, amount: Number(amount), date: date.toISOString() };
-   *  //     if (isEdit) {
-   *  //       const res = await fetch(`${API_URL}/fixed-payments/${payment.id}`, {
-   *  //         method: 'PUT', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(payload)
-   *  //       });
-   *  //       if (!res.ok) throw new Error('No se pudo actualizar');
-   *  //     } else {
-   *  //       const res = await fetch(`${API_URL}/fixed-payments`, {
-   *  //         method: 'POST', headers: { 'Content-Type':'application/json' }, body: JSON.stringify(payload)
-   *  //       });
-   *  //       if (!res.ok) throw new Error('No se pudo crear');
-   *  //     }
-   *  //     navigation.goBack();
-   *  //   } catch (e) { /* mostrar error en UI */ //}  
-  
-  const save = () => {
-    // Validación mínima (demo)
-    const amt = parseFloat(amount || '0');
-    const obj = {
-      id: payment?.id || String(Date.now()), // API: el id vendrá del backend
-      category,
-      amount: isNaN(amt) ? 0 : amt,
-      date,
-    };
+  // form state
+  const [categoryName, setCategoryName] = useState(
+    payment ? (idToName.get(payment.category) || names[0] || 'Renta') : (names[0] || 'Renta')
+  );
+  const [amount, setAmount] = useState(payment?.amount != null ? String(payment.amount) : '');
+  const [description, setDescription] = useState(payment?.description || '');
 
-    // DEMO: callback local para actualizar la lista en FixedPaymentsScreen
-    onSave?.(obj);
+  // una sola fecha (de ahí sacamos day)
+  const [date, setDate] = useState(() => {
+    if (payment?.day) {
+      const now = new Date();
+      return new Date(now.getFullYear(), now.getMonth(), Number(payment.day));
+    }
+    return new Date();
+  });
 
-    // Vuelta a la lista
-    navigation.goBack();
+  const [pickDay, setPickDay] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const parseMoney = (s) => {
+    const n = parseFloat(String(s).replace(',', '.'));
+    return isNaN(n) ? 0 : n;
+  };
+
+  const onSave = async () => {
+    try {
+      const amt = parseMoney(amount);
+      if (!amt || amt <= 0) throw new Error('Monto inválido.');
+      const catId = nameToId.get(categoryName);
+      if (!catId) throw new Error('Selecciona una categoría.');
+
+      const day = date.getDate();
+      // si ya tiene time, lo respetamos; si no, generamos hora actual
+      const timeIso = payment?.time || new Date().toISOString().split('T')[1]; // "HH:MM:SS.mmmZ"
+
+      const payload = {
+        amount: amt,
+        day,
+        time: timeIso,
+        description: description || '',
+        category: catId,
+      };
+
+      setSaving(true);
+      if (isEdit && payment?.id) {
+        await updateFixedPayment(payment.id, payload);
+      } else {
+        await createFixedPayment(payload);
+      }
+
+      Alert.alert('OK', isEdit ? 'Pago fijo actualizado' : 'Pago fijo creado');
+      navigation.goBack();
+    } catch (e) {
+      Alert.alert('Error', e.message || 'No se pudo guardar');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
     <LinearGradient colors={['#2c2c2e', '#1c1c1e']} style={{ flex:1 }}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex:1 }}>
         <ScrollView contentContainerStyle={{ paddingBottom:24 }}>
-          {/* Header */}
           <View style={s.header}>
             <Text style={s.headerTitle}>LanaApp - Pagos fijos</Text>
             <Ionicons name="settings-sharp" size={20} color="#cfe" />
           </View>
 
-          {/* Card principal */}
           <View style={s.card}>
             <Text style={s.title}>{isEdit ? 'Editar pago fijo' : 'Agregar pago fijo'}</Text>
 
-            {/* Categoría
-               // API: usar lista real de categorías */}
+            {/* Categoría */}
             <Text style={s.label}>Categoría</Text>
-            <TouchableOpacity
-              style={[s.pill, { backgroundColor:'#8AA2FF' }]}
-              onPress={() => setShowPicker(true)}
-            >
-              <Text style={s.pillText}>{category}</Text>
+            <TouchableOpacity style={[s.pill, { backgroundColor:'#8AA2FF' }]} onPress={() => setPickCat(true)}>
+              <Text style={s.pillText}>{categoryName}</Text>
               <MaterialIcons name="arrow-right" size={16} color="#fff" />
             </TouchableOpacity>
 
@@ -145,47 +141,57 @@ export default function AddEditFixedPaymentScreen({ route, navigation }) {
               style={s.input}
             />
 
-            {/* Fecha */}
+            {/* Descripción */}
+            <Text style={[s.label, { marginTop: 10 }]}>Descripción (opcional)</Text>
+            <TextInput
+              value={description}
+              onChangeText={setDescription}
+              placeholder="Ej. Renta depto"
+              placeholderTextColor="#bbb"
+              style={s.input}
+            />
+
+            {/* Fecha (de aquí sacamos day) */}
             <Text style={[s.label, { marginTop: 10 }]}>Fecha</Text>
-            <TouchableOpacity style={s.dateBtn} onPress={() => setShowDate(true)}>
+            <TouchableOpacity style={s.dateBtn} onPress={() => setPickDay(true)}>
               <Ionicons name="calendar-outline" size={16} color="#fff" />
               <Text style={s.dateText}>{date.toLocaleDateString()}</Text>
             </TouchableOpacity>
 
-            {/* Guardar */}
             <TouchableOpacity
-              style={[s.primaryBtn, { backgroundColor: isEdit ? '#F5A524' : '#8AA2FF' }]}
-              onPress={save /* API: reemplazar por versión async con POST/PUT */}
+              style={[s.primaryBtn, { backgroundColor: isEdit ? '#F5A524' : '#8AA2FF', opacity: saving ? 0.6 : 1 }]}
+              onPress={onSave}
+              disabled={saving}
             >
-              <Text style={s.primaryText}>{isEdit ? 'Editar' : 'Agregar'}</Text>
+              <Text style={s.primaryText}>{isEdit ? 'Guardar cambios' : 'Guardar'}</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
 
-      {/* Modal de categorías
-         // API: pasa aquí las categorías reales obtenidas del backend */}
+      {/* Picker categorías */}
       <CategoryPickerModal
-        visible={showPicker}
+        visible={pickCat}
         title="Categoría:"
-        categories={demoCategories /* API: categorías reales */}
-        onClose={() => setShowPicker(false)}
-        onSelect={(cat) => setCategory(cat)}
+        categories={names.length ? names : FALLBACK_CATS.map(c => c.name)}
+        onClose={() => setPickCat(false)}
+        onSelect={(name) => setCategoryName(name)}
       />
 
-      {/* DatePicker nativo */}
-      {showDate && (
+      {/* DatePicker */}
+      {pickDay && (
         <DateTimePicker
           value={date}
           mode="date"
           display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-          onChange={(_, d) => { if (d) setDate(d); setShowDate(false); }}
+          onChange={(_, d) => { if (d) setDate(d); setPickDay(false); }}
         />
       )}
     </LinearGradient>
   );
 }
 
+/* estilos */
 const s = StyleSheet.create({
   header:{ paddingTop:18,paddingHorizontal:14,paddingBottom:8, flexDirection:'row',justifyContent:'space-between',alignItems:'center' },
   headerTitle:{ color:'#fff', fontSize:16, fontWeight:'700' },
@@ -194,7 +200,6 @@ const s = StyleSheet.create({
   title:{ color:'#fff', fontSize:18, fontWeight:'800', marginBottom:12 },
 
   label:{ color:'#cfcfd2', marginBottom:6 },
-
   pill:{ alignSelf:'flex-start', paddingVertical:6, paddingHorizontal:10, borderRadius:8, flexDirection:'row', alignItems:'center', gap:6 },
   pillText:{ color:'#fff', fontWeight:'700' },
 
