@@ -15,6 +15,10 @@ export async function setToken(token) {
   else await SecureStore.deleteItemAsync('auth_token');
 }
 
+export async function getToken() {
+  return authToken || await SecureStore.getItemAsync('auth_token');
+}
+
 // Llamada base
 export async function apiFetch(path, { method='GET', headers={}, body } = {}) {
   const res = await fetch(`${API_URL}${path}`, {

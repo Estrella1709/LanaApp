@@ -9,7 +9,12 @@ import { useFocusEffect } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { Swipeable } from 'react-native-gesture-handler';
-import { listTransactions, deleteTransaction, getCategoriesApi } from '../services/api';
+import {
+  listTransactions,
+  deleteTransaction,
+  getCategoriesApi,
+  listBudgets,                // 👈 NUEVO
+} from '../services/api';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
   UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -18,9 +23,10 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
 export default function TransactionsScreen({ navigation }) {
   const [expanded, setExpanded] = useState({});
   const [speedDial, setSpeedDial] = useState(false);
-  const [days, setDays] = useState([]);  
+  const [days, setDays] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [catMap, setCatMap] = useState({}); 
+  const [catMap, setCatMap] = useState({});
+  const [monthBudget, setMonthBudget] = useState(0);   // 👈 planificado del mes
 
   // Mes actual
   const now = new Date();
@@ -35,15 +41,18 @@ export default function TransactionsScreen({ navigation }) {
   const load = async () => {
     try {
       setLoading(true);
-      // 1) Traer categorías y construir el mapa id -> nombre
+
+      // 1) Mapa de categorías
       const cats = await getCategoriesApi().catch(() => []);
       const map = {};
       (Array.isArray(cats) ? cats : []).forEach(c => {
-      const id = c.id ?? c.ID ?? c.Id ?? c.id_category ?? c.idCategory;
-      const name = c.name ?? c.Nombre ?? c.nombre ?? `Cat ${id}`;
-       if (id != null) map[id] = name;
-     });
-     setCatMap(map);
+        const id = c.id ?? c.ID ?? c.Id ?? c.id_category ?? c.idCategory;
+        const name = c.name ?? c.Nombre ?? c.nombre ?? `Cat ${id}`;
+        if (id != null) map[id] = name;
+      });
+      setCatMap(map);
+
+      // 2) Transacciones
       const rows = await listTransactions(); // [{id, amount, datetime, description, category}]
       const filtered = rows.filter(r => {
         const d = new Date(r.datetime);
@@ -51,8 +60,16 @@ export default function TransactionsScreen({ navigation }) {
       });
       const grouped = groupByDay(filtered, map);
       setDays(grouped);
+
+      // 3) Presupuestos del mes (suma por todas las categorías)
+      const budgets = await listBudgets().catch(() => []);
+      const totalMonthBudget = (Array.isArray(budgets) ? budgets : [])
+        .filter(b => Number(b.month) === selMonth) // tu API guarda solo mes (1-12)
+        .reduce((acc, b) => acc + Number(b.amount || 0), 0);
+      setMonthBudget(totalMonthBudget);
+
     } catch (e) {
-      Alert.alert('Error', e.message || 'No se pudieron cargar las transacciones');
+      Alert.alert('Error', e.message || 'No se pudieron cargar los datos');
     } finally {
       setLoading(false);
     }
@@ -60,11 +77,17 @@ export default function TransactionsScreen({ navigation }) {
 
   useFocusEffect(useCallback(() => { load(); }, [selYear, selMonth]));
 
+  // Totales derivados + presupuesto restante
   const totals = useMemo(() => {
     let income = 0, expense = 0;
     days.forEach(d => { income += d.income; expense += d.expense; });
-    return { income, expense, budget: 0 };
-  }, [days]);
+    const budgetLeft = monthBudget + income - expense; // 👈 regla de negocio que pediste
+    return { income, expense, budgetLeft };
+  }, [days, monthBudget]);
+
+  const lowBudget = useMemo(() => {
+    return monthBudget > 0 && totals.budgetLeft <= 0.10 * monthBudget; // 👈 10%
+  }, [monthBudget, totals.budgetLeft]);
 
   const toggle = (id) => {
     LayoutAnimation.easeInEaseOut();
@@ -83,32 +106,25 @@ export default function TransactionsScreen({ navigation }) {
   );
 
   const onEditDay = (dayItem) => {
-    // Tomamos el primer ingreso y el primer gasto del día (si hay varios, luego lo refinamos)
     const incomeTx  = dayItem.items.find(t => Number(t.amount) >= 0) || null;
     const expenseTx = dayItem.items.find(t => Number(t.amount) < 0)  || null;
 
-    // Abrimos pantalla que permite editar ambos, sin obligar a llenar los dos
     navigation.navigate('AddEditTransaction', {
       mode: 'edit',
       kind: 'both',
-      income: incomeTx ? {
-        id: incomeTx.id,
-        amount: Math.abs(Number(incomeTx.amount) || 0),
-        datetime: incomeTx.datetime,
-        description: incomeTx.description,
-        category: incomeTx.category,
-        categoryName: incomeTx.categoryName,
-      } : null,
-      expense: expenseTx ? {
-        id: expenseTx.id,
-        amount: Math.abs(Number(expenseTx.amount) || 0),
-        datetime: expenseTx.datetime,
-        description: expenseTx.description,
-        category: expenseTx.category,
-        categoryName: expenseTx.categoryName,
-      } : null,
+      income:  incomeTx ? toNavTx(incomeTx)  : null,
+      expense: expenseTx ? toNavTx(expenseTx) : null,
     });
   };
+
+  const toNavTx = (tx) => ({
+    id: tx.id,
+    amount: Math.abs(Number(tx.amount) || 0),
+    datetime: tx.datetime,
+    description: tx.description,
+    category: tx.category,
+    categoryName: tx.categoryName,
+  });
 
   const onDeleteDay = (dayItem) => {
     const incomeTx  = dayItem.items.find(t => Number(t.amount) >= 0);
@@ -144,7 +160,6 @@ export default function TransactionsScreen({ navigation }) {
     return (
       <Swipeable renderRightActions={() => <RightActions onEdit={() => onEditDay(item)} onDelete={() => onDeleteDay(item)} />}>
         <View style={styles.rowContainer}>
-          {/* Cabecera del día (tap para expandir/cerrar) */}
           <TouchableOpacity style={styles.rowHeader} onPress={() => toggle(item.id)}>
             <View>
               <Text style={styles.rowDayNum}>{item.day}</Text>
@@ -168,7 +183,7 @@ export default function TransactionsScreen({ navigation }) {
                         {isExpense ? 'Gasto' : 'Ingreso'} • ${fmt(Math.abs(tx.amount))}
                       </Text>
                       <Text style={[styles.detailValue, isExpense ? styles.expense : styles.income]}>
-                       {catMap[tx.category] ?? tx.categoryName ?? `Cat ${tx.category}`}
+                        {catMap[tx.category] ?? tx.categoryName ?? `Cat ${tx.category}`}
                       </Text>
                     </View>
                     {!!tx.description && <Text style={styles.detailDesc}>{tx.description}</Text>}
@@ -196,9 +211,14 @@ export default function TransactionsScreen({ navigation }) {
         <TabButton label="Gráficas" onPress={() => navigation.navigate('Charts')} />
       </View>
 
+      {/* ---- Tarjeta de presupuesto ---- */}
       <View style={styles.card}>
         <Text style={styles.cardTitle}>Presupuesto Total del mes</Text>
-        <Text style={styles.cardTotal}>$00.00</Text>
+        <Text style={styles.cardTotal}>${fmt(totals.budgetLeft)}</Text>
+        <Text style={styles.cardSub}>Planificado: ${fmt(monthBudget)}</Text>
+        {lowBudget && (
+          <Text style={styles.lowWarn}>Presupuesto bajo</Text>  
+        )}
 
         <View style={styles.innerCard}>
           <RowIconText icon="arrow-up" text="Ingresos" value={`$${fmt(totals.income)}`} valueStyle={styles.income} />
@@ -259,7 +279,7 @@ export default function TransactionsScreen({ navigation }) {
   );
 }
 
-/* ---- helpers ---- */
+/* ---- helpers, igual que tenías ---- */
 function groupByDay(rows, catMap = {}) {
   const map = new Map();
   rows.forEach((tx, idx) => {
@@ -319,7 +339,7 @@ function RowIconText({ icon, text, value, valueStyle }) {
   );
 }
 
-/* ---- estilos ---- */
+/* ---- estilos (agregué dos) ---- */
 const styles = StyleSheet.create({
   header:{ paddingTop:18, paddingHorizontal:14, paddingBottom:8, flexDirection:'row', justifyContent:'space-between', alignItems:'center' },
   headerTitle:{ color:'#fff', fontSize:16, fontWeight:'700' },
@@ -328,8 +348,10 @@ const styles = StyleSheet.create({
   tabText:{ color:'#ffe', fontSize:13 },
   card:{ margin:14, borderWidth:1, borderColor:'#f0b6d6', borderRadius:14, padding:12, backgroundColor:'rgba(255,255,255,0.04)' },
   cardTitle:{ color:'#fff', opacity:0.9, marginBottom:4 },
-  cardTotal:{ color:'#fff', fontSize:28, fontWeight:'800', marginBottom:10 },
+  cardTotal:{ color:'#fff', fontSize:28, fontWeight:'800', marginBottom:4 },            // ← margen menor
+  cardSub:{ color:'#cfcfcf', marginBottom:8 },                                           // 👈 NUEVO (planificado)
   innerCard:{ borderWidth:1, borderColor:'#f0b6d6', borderRadius:12, padding:10, marginBottom:10 },
+  lowWarn:{ color:'#F5A524', fontWeight:'800', marginBottom:6 },                         // 👈 NUEVO (10%)
   iconRow:{ flexDirection:'row', alignItems:'center', marginVertical:6 },
   iconRowLabel:{ color:'#cfe', marginLeft:8 },
   iconRowValue:{ fontWeight:'700' },

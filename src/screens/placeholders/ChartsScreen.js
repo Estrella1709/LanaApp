@@ -4,7 +4,7 @@ import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Alert } from 'rea
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { PieChart } from 'react-native-gifted-charts';
-import { apiFetch, getToken } from '../services/api';
+import { apiFetch, getToken } from '../../services/api';
 
 export default function ChartsScreen() {
   const [mode, setMode] = useState('income'); // 'income' | 'expense' | 'general'
@@ -17,8 +17,6 @@ export default function ChartsScreen() {
     (async () => {
       try {
         setLoading(true);
-
-        // <-- IMPORTANTE: obtener token y agregarlo al query
         const token = await getToken();
         const q = token ? `?token=${encodeURIComponent(token)}` : '';
 
@@ -132,10 +130,11 @@ export default function ChartsScreen() {
         </View>
       </View>
 
-      {/* Contenido */}
+      {/* Contenido scrolleable: Pie + lista por categoría */}
       <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 32 }}>
+        {/* Donut chart o vacío */}
         <View style={s.chartCard}>
-          {currentTotal > 0 ? (
+          {currentData && currentData.length > 0 ? (
             <PieChart
               data={currentData}
               donut
@@ -151,12 +150,15 @@ export default function ChartsScreen() {
               )}
             />
           ) : (
-            <Text style={{ color:'#ccc' }}>No hay datos para este mes.</Text>
+            <Text style={{ color:'#ddd', textAlign:'center' }}>
+              No hay datos para este mes
+            </Text>
           )}
         </View>
 
+        {/* Tabla simple por categoría */}
         {tableRows.map((row, idx) => (
-          <View key={`${row.category}-${idx}`} style={s.catRow}>
+          <View key={idx} style={s.catRow}>
             <Text style={s.catName}>{row.category}</Text>
             <View style={{ flex: 1 }} />
             <View>
